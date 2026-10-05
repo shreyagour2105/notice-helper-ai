@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>College Notice Helper</title>
+<style>
+  :root { --bg:#f5f7fb; --card:#fff; --text:#1c2333; --muted:#667085; --accent:#4f46e5; --line:#e4e7ec; --hl:#eef2ff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12141c; --card:#1c2030; --text:#eceff6; --muted:#9aa3b5; --accent:#8b8cff; --line:#2c3247; --hl:#262b45; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); line-height:1.5; }
+  .wrap { max-width:760px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { margin:0 0 4px; font-size:1.6rem; } .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; }
+  textarea { width:100%; min-height:150px; padding:12px; border:1px solid var(--line); border-radius:10px; font:inherit; background:var(--bg); color:var(--text); resize:vertical; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; align-items:center; }
+  button, label.btn { padding:10px 16px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; }
+  button:disabled { opacity:.6; cursor:wait; }
+  input[type=file] { display:none; }
+  .reminder { background:var(--hl); border-left:4px solid var(--accent); padding:14px 16px; border-radius:10px; font-size:1.1rem; font-weight:600; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:99px; font-size:.8rem; font-weight:600; background:var(--hl); color:var(--accent); margin-left:8px; }
+  dl { margin:16px 0 0; display:grid; grid-template-columns:140px 1fr; gap:10px 12px; }
+  dt { color:var(--muted); font-size:.9rem; } dd { margin:0; font-weight:500; word-break:break-word; }
+  .none { color:var(--muted); font-weight:400; font-style:italic; }
+  .hidden { display:none; } a { color:var(--accent); }
+  .note { color:var(--muted); font-size:.85rem; }
+  .err { color:#d92d20; font-weight:500; }
+  ul { margin:8px 0 0; padding-left:20px; }
+  @media (max-width:520px) { dl { grid-template-columns:1fr; gap:2px; } dt { margin-top:8px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📌 College Notice Helper</h1>
+  <p class="sub">Paste a notice, or upload a photo / PDF of it. AI pulls out what you need to act on.</p>
+
+  <div class="card">
+    <textarea id="notice" placeholder="Paste your college notice here..."></textarea>
+    <div class="row">
+      <button class="primary" id="go">Extract details</button>
+      <label class="btn">Upload PDF / image / .txt<input type="file" id="file" accept=".txt,.pdf,image/png,image/jpeg,image/webp"></label>
+      <button id="sample">Try a sample</button>
+      <button id="clear">Clear</button>
+    </div>
+    <p class="note" id="fileName"></p>
+    <p class="err" id="err"></p>
+  </div>
+
+  <div id="out" class="hidden">
+    <div class="card">
+      <div class="reminder" id="reminder"></div>
+      <div class="row"><button id="copy">Copy reminder</button></div>
+    </div>
+    <div class="card">
+      <strong>Notice details</strong><span class="badge" id="conf"></span>
+      <dl id="details"></dl>
+      <div id="missingBox" class="hidden"><p class="note" style="margin-top:16px">⚠️ Not mentioned in the notice:</p><ul id="missing"></ul></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let attached = null; // {mimeType, data(base64)}
+
+const fmtDate = iso => { if (!iso) return null; const d = new Date(iso + 'T00:00:00'); return isNaN(d) ? iso : d.toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' }); };
+const fmtTime = t => { if (!t) return ''; const [h, m] = t.split(':').map(Number); if (isNaN(h)) return t; return ` at ${h % 12 || 12}:${String(m || 0).padStart(2,'0')} ${h >= 12 ? 'PM' : 'AM'}`; };
+const dt = o => (o && o.date) ? fmtDate(o.date) + fmtTime(o.time) : null;
+
+function row(dl, label, value, isLink) {
+  const a = document.createElement('dt'); a.textContent = label;
+  const b = document.createElement('dd');
+  if (!value) { b.className = 'none'; b.textContent = 'Not mentioned'; }
+  else if (isLink && /^https?:\/\//i.test(value)) { const l = document.createElement('a'); l.href = value; l.textContent = value; l.target = '_blank'; l.rel = 'noopener'; b.appendChild(l); }
+  else b.textContent = value;
+  dl.append(a, b);
+}
+
+function show(r) {
+  $('reminder').textContent = r.reminder;
+  $('conf').textContent = 'Confidence: ' + r.confidence;
+  const dl = $('details'); dl.innerHTML = '';
+  row(dl, 'Event / Assignment', r.title);
+  row(dl, 'Type', r.type);
+  row(dl, 'Deadline', dt(r.deadline));
+  row(dl, 'Date & Time', dt(r.event));
+  row(dl, 'Venue', r.venue);
+  row(dl, 'Link', r.link, true);
+  row(dl, 'Applies to', r.audience);
+  (r.other_dates || []).forEach(o => row(dl, o.label, dt(o)));
+  const ul = $('missing'); ul.innerHTML = '';
+  (r.missing_info || []).forEach(m => { const li = document.createElement('li'); li.textContent = m; ul.appendChild(li); });
+  $('missingBox').classList.toggle('hidden', !(r.missing_info || []).length);
+  $('out').classList.remove('hidden');
+}
+
+async function run() {
+  $('err').textContent = '';
+  const text = $('notice').value.trim();
+  if (!text && !attached) { $('err').textContent = 'Please paste a notice or upload a file first.'; return; }
+  $('go').disabled = true; $('go').textContent = 'Reading notice...';
+  try {
+    const resp = await fetch('/api/extract', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ text, file: attached }) });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Something went wrong');
+    show(data);
+  } catch (e) { $('err').textContent = e.message; }
+  $('go').disabled = false; $('go').textContent = 'Extract details';
+}
+
+$('go').onclick = run;
+$('clear').onclick = () => { $('notice').value = ''; attached = null; $('fileName').textContent = ''; $('err').textContent = ''; $('out').classList.add('hidden'); };
+$('copy').onclick = () => navigator.clipboard.writeText($('reminder').textContent).then(() => { $('copy').textContent = 'Copied ✓'; setTimeout(() => $('copy').textContent = 'Copy reminder', 1500); });
+$('sample').onclick = () => {
+  attached = null; $('fileName').textContent = '';
+  $('notice').value = `Subject: Data Structures Assignment 2\n\nDear students, all second year CSE students must submit Data Structures Assignment 2 before 5 PM this Friday on Google Classroom: https://classroom.google.com/c/ds2.\n\nA doubt-clearing session will be held on Thursday at 3:30 PM in Seminar Hall 2, Block B.`;
+};
+$('file').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (f.size > 3 * 1024 * 1024) { $('err').textContent = 'File too large (max 3 MB).'; return; }
+  const rd = new FileReader();
+  if (f.type === 'text/plain' || f.name.endsWith('.txt')) {
+    rd.onload = () => { $('notice').value = rd.result; attached = null; $('fileName').textContent = 'Loaded ' + f.name; };
+    rd.readAsText(f);
+  } else {
+    rd.onload = () => { attached = { mimeType: f.type, data: rd.result.split(',')[1] }; $('fileName').textContent = '📎 Attached: ' + f.name; };
+    rd.readAsDataURL(f);
+  }
+};
+</script>
+</body>
+</html>
