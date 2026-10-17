@@ -97,7 +97,7 @@ test("Valid notice extraction returns 200 and expected response structure", asyn
   await handler(req, res);
 
   assert.equal(res.statusCode, 200);
-  assert.ok(capturedUrl.includes("gemini-2.5-flash:generateContent"));
+  assert.ok(capturedUrl.includes("gemini-3.8-flash:generateContent"));
   assert.equal(capturedInit.headers["x-goog-api-key"], "test-api-key-mock");
   assert.equal(res.body.title, "Data Structures Assignment 2");
   assert.equal(res.body.type, "assignment");

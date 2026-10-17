@@ -2,7 +2,7 @@
 // Keeps the API key on the server (never in the browser).
 const { SYSTEM_PROMPT, buildUserPrompt, RESPONSE_SCHEMA } = require("../prompts/notice");
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-3.8-flash";
 const MAX_TEXT = 8000; // characters
 const MAX_FILE_BYTES = 3 * 1024 * 1024; // 3 MB
 const ALLOWED_MIME_TYPES = new Set([
