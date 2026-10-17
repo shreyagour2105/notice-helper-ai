@@ -1,11 +1,11 @@
 node_modules/
 .env
+.env*
 .env.*
 !.env.example
+.vercel
 .vercel/
 .DS_Store
 *.log
 npm-debug.log*
 coverage/
-.vercel
-.env*
