@@ -62,69 +62,293 @@
 
 <script>
 const $ = id => document.getElementById(id);
+const MAX_TEXT = 8000;
+const MAX_FILE_BYTES = 3 * 1024 * 1024;
+const ALLOWED_BINARY_MIMES = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/webp']);
 let attached = null; // {mimeType, data(base64)}
+let copyTimer = null;
 
-const fmtDate = iso => { if (!iso) return null; const d = new Date(iso + 'T00:00:00'); return isNaN(d) ? iso : d.toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' }); };
-const fmtTime = t => { if (!t) return ''; const [h, m] = t.split(':').map(Number); if (isNaN(h)) return t; return ` at ${h % 12 || 12}:${String(m || 0).padStart(2,'0')} ${h >= 12 ? 'PM' : 'AM'}`; };
-const dt = o => (o && o.date) ? fmtDate(o.date) + fmtTime(o.time) : null;
+function resolveMimeType(file) {
+  if (!file) return null;
+  const rawType = (file.type || '').trim().toLowerCase();
+  const name = (file.name || '').trim().toLowerCase();
+  if (rawType === 'text/plain' || (!rawType && name.endsWith('.txt'))) return 'text/plain';
+  if (ALLOWED_BINARY_MIMES.has(rawType)) return rawType;
+  if (!rawType || rawType === 'application/octet-stream') {
+    if (name.endsWith('.pdf')) return 'application/pdf';
+    if (name.endsWith('.png')) return 'image/png';
+    if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
+    if (name.endsWith('.webp')) return 'image/webp';
+  }
+  return null;
+}
+
+const fmtDate = iso => {
+  if (!iso || typeof iso !== 'string') return null;
+  const clean = iso.trim();
+  if (!clean) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(clean);
+  if (!m) return clean;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const d = new Date(year, month - 1, day);
+  if (
+    isNaN(d.getTime()) ||
+    d.getFullYear() !== year ||
+    d.getMonth() !== month - 1 ||
+    d.getDate() !== day
+  ) {
+    return clean;
+  }
+  return d.toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+};
+
+const fmtTime = t => {
+  if (!t || typeof t !== 'string') return '';
+  const clean = t.trim();
+  if (!clean) return '';
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(clean);
+  if (!m) return ` at ${clean}`;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h < 0 || h > 23 || min < 0 || min > 59) return ` at ${clean}`;
+  return ` at ${h % 12 || 12}:${String(min).padStart(2,'0')} ${h >= 12 ? 'PM' : 'AM'}`;
+};
+
+const dt = o => {
+  if (!o || typeof o !== 'object') return null;
+  const d = fmtDate(o.date);
+  return d ? d + fmtTime(o.time) : null;
+};
+
+function isSafeHttpUrl(value) {
+  if (typeof value !== 'string' || !/^https?:\/\//i.test(value.trim())) return false;
+  try {
+    const u = new URL(value.trim());
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function row(dl, label, value, isLink) {
-  const a = document.createElement('dt'); a.textContent = label;
+  const a = document.createElement('dt');
+  a.textContent = label || 'Detail';
   const b = document.createElement('dd');
-  if (!value) { b.className = 'none'; b.textContent = 'Not mentioned'; }
-  else if (isLink && /^https?:\/\//i.test(value)) { const l = document.createElement('a'); l.href = value; l.textContent = value; l.target = '_blank'; l.rel = 'noopener'; b.appendChild(l); }
-  else b.textContent = value;
+  const textVal = typeof value === 'string' ? value.trim() : '';
+  if (!textVal) {
+    b.className = 'none';
+    b.textContent = 'Not mentioned';
+  } else if (isLink && isSafeHttpUrl(textVal)) {
+    const l = document.createElement('a');
+    l.href = textVal;
+    l.textContent = textVal;
+    l.target = '_blank';
+    l.rel = 'noopener noreferrer';
+    b.appendChild(l);
+  } else {
+    b.textContent = textVal;
+  }
   dl.append(a, b);
 }
 
 function show(r) {
-  $('reminder').textContent = r.reminder;
-  $('conf').textContent = 'Confidence: ' + r.confidence;
-  const dl = $('details'); dl.innerHTML = '';
-  row(dl, 'Event / Assignment', r.title);
-  row(dl, 'Type', r.type);
-  row(dl, 'Deadline', dt(r.deadline));
-  row(dl, 'Date & Time', dt(r.event));
-  row(dl, 'Venue', r.venue);
-  row(dl, 'Link', r.link, true);
-  row(dl, 'Applies to', r.audience);
-  (r.other_dates || []).forEach(o => row(dl, o.label, dt(o)));
-  const ul = $('missing'); ul.innerHTML = '';
-  (r.missing_info || []).forEach(m => { const li = document.createElement('li'); li.textContent = m; ul.appendChild(li); });
-  $('missingBox').classList.toggle('hidden', !(r.missing_info || []).length);
+  $('reminder').textContent = (r && typeof r.reminder === 'string' && r.reminder.trim())
+    ? r.reminder.trim()
+    : 'No reminder available.';
+  const conf = (r && typeof r.confidence === 'string' && r.confidence.trim())
+    ? r.confidence.trim()
+    : 'unknown';
+  $('conf').textContent = 'Confidence: ' + conf;
+  const dl = $('details');
+  dl.replaceChildren();
+  row(dl, 'Event / Assignment', r && r.title);
+  row(dl, 'Type', r && r.type);
+  row(dl, 'Deadline', dt(r && r.deadline));
+  row(dl, 'Date & Time', dt(r && r.event));
+  row(dl, 'Venue', r && r.venue);
+  row(dl, 'Link', r && r.link, true);
+  row(dl, 'Applies to', r && r.audience);
+  (Array.isArray(r && r.other_dates) ? r.other_dates : []).forEach(o => {
+    if (o && typeof o === 'object') {
+      row(dl, o.label || 'Other date', dt(o));
+    }
+  });
+  const ul = $('missing');
+  ul.replaceChildren();
+  const missingItems = Array.isArray(r && r.missing_info)
+    ? r.missing_info.filter(m => typeof m === 'string' && m.trim())
+    : [];
+  missingItems.forEach(m => {
+    const li = document.createElement('li');
+    li.textContent = m.trim();
+    ul.appendChild(li);
+  });
+  $('missingBox').classList.toggle('hidden', missingItems.length === 0);
   $('out').classList.remove('hidden');
 }
 
 async function run() {
   $('err').textContent = '';
-  const text = $('notice').value.trim();
-  if (!text && !attached) { $('err').textContent = 'Please paste a notice or upload a file first.'; return; }
-  $('go').disabled = true; $('go').textContent = 'Reading notice...';
+  const rawText = $('notice').value;
+  const text = rawText.trim();
+  if (!text && !attached) {
+    $('err').textContent = 'Please paste a notice or upload a file first.';
+    return;
+  }
+  if (rawText.length > MAX_TEXT) {
+    $('err').textContent = `Notice too long (max ${MAX_TEXT} characters).`;
+    return;
+  }
+  $('go').disabled = true;
+  $('go').textContent = 'Reading notice...';
   try {
-    const resp = await fetch('/api/extract', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ text, file: attached }) });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || 'Something went wrong');
+    const resp = await fetch('/api/extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, file: attached }),
+    });
+    let data = null;
+    try {
+      data = await resp.json();
+    } catch {
+      throw new Error('Could not read the server response. Please try again.');
+    }
+    if (!resp.ok) {
+      throw new Error((data && data.error) || 'Something went wrong');
+    }
+    if (!data || typeof data !== 'object') {
+      throw new Error('Received an empty response from the server.');
+    }
     show(data);
-  } catch (e) { $('err').textContent = e.message; }
-  $('go').disabled = false; $('go').textContent = 'Extract details';
+  } catch (e) {
+    $('err').textContent = (e && e.message) ? e.message : 'Something went wrong';
+  } finally {
+    $('go').disabled = false;
+    $('go').textContent = 'Extract details';
+  }
 }
 
 $('go').onclick = run;
-$('clear').onclick = () => { $('notice').value = ''; attached = null; $('fileName').textContent = ''; $('err').textContent = ''; $('out').classList.add('hidden'); };
-$('copy').onclick = () => navigator.clipboard.writeText($('reminder').textContent).then(() => { $('copy').textContent = 'Copied ✓'; setTimeout(() => $('copy').textContent = 'Copy reminder', 1500); });
+
+$('clear').onclick = () => {
+  $('notice').value = '';
+  attached = null;
+  $('file').value = '';
+  $('fileName').textContent = '';
+  $('err').textContent = '';
+  $('reminder').textContent = '';
+  $('conf').textContent = '';
+  $('details').replaceChildren();
+  $('missing').replaceChildren();
+  $('missingBox').classList.add('hidden');
+  $('out').classList.add('hidden');
+};
+
+$('copy').onclick = async () => {
+  const text = $('reminder').textContent.trim();
+  if (!text) return;
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const copied = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (!copied) throw new Error('Copy failed');
+    }
+    $('copy').textContent = 'Copied ✓';
+    if (copyTimer) clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => { $('copy').textContent = 'Copy reminder'; }, 1500);
+  } catch {
+    $('err').textContent = 'Could not copy reminder automatically. Please select and copy it manually.';
+  }
+};
+
 $('sample').onclick = () => {
-  attached = null; $('fileName').textContent = '';
+  attached = null;
+  $('file').value = '';
+  $('fileName').textContent = '';
+  $('err').textContent = '';
   $('notice').value = `Subject: Data Structures Assignment 2\n\nDear students, all second year CSE students must submit Data Structures Assignment 2 before 5 PM this Friday on Google Classroom: https://classroom.google.com/c/ds2.\n\nA doubt-clearing session will be held on Thursday at 3:30 PM in Seminar Hall 2, Block B.`;
 };
+
 $('file').onchange = e => {
-  const f = e.target.files[0]; if (!f) return;
-  if (f.size > 3 * 1024 * 1024) { $('err').textContent = 'File too large (max 3 MB).'; return; }
+  $('err').textContent = '';
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+
+  const mimeType = resolveMimeType(f);
+  if (!mimeType) {
+    attached = null;
+    $('fileName').textContent = '';
+    e.target.value = '';
+    $('err').textContent = 'Unsupported file type. Please upload a PDF, PNG, JPG, WEBP, or .txt file.';
+    return;
+  }
+
+  if (f.size === 0) {
+    attached = null;
+    $('fileName').textContent = '';
+    e.target.value = '';
+    $('err').textContent = 'The selected file is empty.';
+    return;
+  }
+
+  if (f.size > MAX_FILE_BYTES) {
+    attached = null;
+    $('fileName').textContent = '';
+    e.target.value = '';
+    $('err').textContent = 'File too large (max 3 MB).';
+    return;
+  }
+
   const rd = new FileReader();
-  if (f.type === 'text/plain' || f.name.endsWith('.txt')) {
-    rd.onload = () => { $('notice').value = rd.result; attached = null; $('fileName').textContent = 'Loaded ' + f.name; };
+  rd.onerror = () => {
+    attached = null;
+    $('fileName').textContent = '';
+    e.target.value = '';
+    $('err').textContent = 'Could not read the selected file. Please try again.';
+  };
+
+  if (mimeType === 'text/plain') {
+    rd.onload = () => {
+      const content = typeof rd.result === 'string' ? rd.result : '';
+      if (content.length > MAX_TEXT) {
+        attached = null;
+        $('fileName').textContent = '';
+        e.target.value = '';
+        $('err').textContent = `Notice too long (max ${MAX_TEXT} characters).`;
+        return;
+      }
+      $('notice').value = content;
+      attached = null;
+      e.target.value = '';
+      $('fileName').textContent = 'Loaded ' + f.name;
+    };
     rd.readAsText(f);
   } else {
-    rd.onload = () => { attached = { mimeType: f.type, data: rd.result.split(',')[1] }; $('fileName').textContent = '📎 Attached: ' + f.name; };
+    rd.onload = () => {
+      const result = typeof rd.result === 'string' ? rd.result : '';
+      const base64 = result.includes(',') ? result.split(',')[1] : '';
+      if (!base64) {
+        attached = null;
+        $('fileName').textContent = '';
+        e.target.value = '';
+        $('err').textContent = 'Could not encode the selected file.';
+        return;
+      }
+      attached = { mimeType, data: base64 };
+      e.target.value = '';
+      $('fileName').textContent = '📎 Attached: ' + f.name;
+    };
     rd.readAsDataURL(f);
   }
 };
