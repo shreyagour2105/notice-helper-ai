@@ -1,8 +1,8 @@
-# 📌 College Notice Helper (PromptWars)
+# 📌 College Notice Helper 
 
 Paste or upload (PDF, PNG, JPG, WEBP, or `.txt`) a college notice. The AI extracts the event/assignment title, notice type, deadline, event date & time, venue, link, and target audience, then writes a friendly one-line reminder and highlights any missing details honestly.
 
-**Live demo:** `<PASTE YOUR VERCEL LINK HERE AFTER DEPLOYING>`
+**Live demo:** `https://notice-helper-ai.vercel.app/`
 
 ## How It Works
 `Browser (index.html)` → `POST /api/extract` (Vercel Serverless Function in `api/extract.js`) → `Google Gemini API` → `Structured JSON` → `Safe DOM UI`.
